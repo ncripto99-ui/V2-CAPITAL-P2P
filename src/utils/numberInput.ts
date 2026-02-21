@@ -238,3 +238,30 @@ export function toFixedMoneyRaw(raw: string, decimals = 2) {
   if (!Number.isFinite(n)) return "";
   return n.toFixed(decimals);
 }
+
+// ---------------------------
+// CEREBRO FINANCIERO (P2P)
+// ---------------------------
+
+/**
+ * Truncar (NO redondear) a X decimales.
+ * Binance-style para fiat: evita que te quede +0.01 acumulado por redondeos.
+ */
+export function truncDecimals(value: number, decimals: number) {
+  if (!Number.isFinite(value)) return 0;
+  const d = Math.max(0, Math.floor(decimals));
+  const p = 10 ** d;
+
+  // +1e-12 evita casos como 1.999999999 -> 1.99 por float
+  return Math.floor((value + 1e-12) * p) / p;
+}
+
+/** Truncar a 2 decimales (fiat: C$ / USD) */
+export function trunc2(value: number) {
+  return truncDecimals(value, 2);
+}
+
+/** Truncar a 6 decimales (USDT) si algún día te hace falta */
+export function trunc6(value: number) {
+  return truncDecimals(value, 6);
+}

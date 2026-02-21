@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import type { AppData, Account, P2POrder, Expense, DailyReport, Settings, Movement } from "../types";
+import { trunc2 } from "../utils/numberInput"; // ✅ CEREBRO: truncado Binance
 
 interface DataContextType {
   data: AppData;
@@ -58,6 +59,28 @@ const DEFAULT_DATA: AppData = {
 function isActiveOrder(order: P2POrder) {
   // compatibilidad: si no existe status, se considera ACTIVA
   return !order.status || order.status === "ACTIVA";
+}
+
+/**
+ * ✅ Cálculo "Binance-style" del total fiat:
+ * - total = usdt * price
+ * - truncado a 2 decimales
+ */
+function calcOrderTotalInOrderCurrency(order: P2POrder) {
+  return trunc2(order.usdt * order.pricePerUSDT);
+}
+
+/**
+ * ✅ Total en C$ para reportes / promedio / etc:
+ * - Si orden es C$: es ese total
+ * - Si orden es USD: convierte con usdToCBuy y trunca
+ */
+function calcOrderTotalInC(order: P2POrder, settings: Settings) {
+  const total = calcOrderTotalInOrderCurrency(order);
+  if (order.currency === "USD") {
+    return trunc2(total * settings.usdToCBuy);
+  }
+  return total; // C$
 }
 
 export function DataProvider({ children }: { children: ReactNode }) {
@@ -229,18 +252,35 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const account = data.accounts.find((a) => a.id === accountId);
     if (!account) return 0;
 
-    // ⚠️ Binance NO usa este cálculo (usa getBinanceBalance)
-    // Pero por si acaso lo llaman, devolvemos su initialBalance (sin P2P) o podrías:
-    // if (account.type === "Binance") return getBinanceBalance();
     let balance = account.initialBalance;
 
-    // ✅ solo órdenes activas afectan balance
+    // ✅ SOLO órdenes activas afectan balance
     data.orders.filter(isActiveOrder).forEach((order) => {
-      if (order.accountId === accountId) {
-        const total = order.usdt * order.pricePerUSDT;
-        if (order.type === "COMPRA") balance -= total;
-        else balance += total;
+      if (order.accountId !== accountId) return;
+
+      // total en moneda de la orden (truncado)
+      const totalInOrderCurrency = calcOrderTotalInOrderCurrency(order);
+
+      // ✅ Caso principal: la cuenta y la orden están en la misma moneda (C$ con C$, USD con USD)
+      if (account.currency === order.currency) {
+        if (order.type === "COMPRA") balance -= totalInOrderCurrency;
+        else balance += totalInOrderCurrency;
+        return;
       }
+
+      // ✅ Caso útil: cuenta C$ y orden USD -> convertimos a C$ (usdToCBuy) y truncamos
+      if (account.currency === "C$" && order.currency === "USD") {
+        const totalInC = trunc2(totalInOrderCurrency * data.settings.usdToCBuy);
+        if (order.type === "COMPRA") balance -= totalInC;
+        else balance += totalInC;
+        return;
+      }
+
+      // ⚠️ Si llega una combinación rara (ej. cuenta USD y orden C$), no convertimos por defecto
+      // para no inventar reglas. (Si quieres, luego lo definimos).
+      // Por ahora, se aplica el total tal cual (comportamiento previo).
+      if (order.type === "COMPRA") balance -= totalInOrderCurrency;
+      else balance += totalInOrderCurrency;
     });
 
     // ✅ gastos
@@ -251,7 +291,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
     });
 
     // ✅ MOVIMIENTOS: ingreso/retiro/transferencia afectan balance
-    // Importante: Solo aplican si la moneda del movimiento coincide con la moneda de la cuenta.
     (data.movements ?? []).forEach((m) => {
       if (m.status === "ANULADO") return;
 
@@ -307,7 +346,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
 
     let totalUSDT = 0;
-    let totalCost = 0;
+    let totalCostC = 0;
 
     data.orders
       .filter(isActiveOrder)
@@ -316,14 +355,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const usdtReceived = order.usdt - order.commissionUSDT;
         totalUSDT += usdtReceived;
 
-        let costInC = order.usdt * order.pricePerUSDT;
-        if (order.currency === "USD") {
-          costInC = costInC * data.settings.usdToCBuy;
-        }
-        totalCost += costInC;
+        // ✅ costo en C$ truncado estilo Binance
+        const costInC = calcOrderTotalInC(order, data.settings);
+        totalCostC += costInC;
       });
 
-    return totalUSDT > 0 ? totalCost / totalUSDT : data.settings.usdtToCManual;
+    // promedio
+    return totalUSDT > 0 ? totalCostC / totalUSDT : data.settings.usdtToCManual;
   };
 
   const getTotalCapitalC = (): number => {

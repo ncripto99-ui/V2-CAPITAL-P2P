@@ -6,9 +6,9 @@ import { Input } from "../components/Input";
 import { Select } from "../components/Select";
 import { Plus, TrendingDown, TrendingUp, X, Trash2, Edit2, Ban } from "lucide-react";
 import type { P2POrder } from "../types";
-import { formatMoney, rawToNumber } from "../utils/numberInput";
+import { formatMoney, rawToNumber, trunc2 } from "../utils/numberInput";
 
-type FilterRange = "30" | "90" | "180" | "ALL";
+type FilterRange = "1" | "7" | "30" | "60" | "90" | "ALL";
 
 export function Orders() {
   const {
@@ -53,15 +53,20 @@ export function Orders() {
   const usdtToC = getUSDTToC();
 
   const calculateTotals = () => {
-    const total = usdtNum * priceNum;
-    const commissionInCurrency = commissionNum * priceNum;
+    // Raw
+    const totalRaw = usdtNum * priceNum;
+    const commissionRaw = commissionNum * priceNum;
+
+    // ✅ Binance-style: truncar a 2 decimales en moneda de operación
+    const total = trunc2(totalRaw);
+    const commissionInCurrency = trunc2(commissionRaw);
 
     let totalInC = total;
     let commissionInC = commissionInCurrency;
 
     if (formData.currency === "USD") {
-      totalInC = total * data.settings.usdToCBuy;
-      commissionInC = commissionInCurrency * data.settings.usdToCBuy;
+      totalInC = trunc2(total * data.settings.usdToCBuy);
+      commissionInC = trunc2(commissionInCurrency * data.settings.usdToCBuy);
     }
 
     return { total, totalInC, commissionInC };
@@ -131,7 +136,7 @@ export function Orders() {
       type: formData.type as "COMPRA" | "VENTA",
       currency: formData.currency as "C$" | "USD",
 
-      // ✅ redondeo SOLO al guardar
+      // ✅ redondeo SOLO al guardar (USDT 6 decimales, precio 2)
       usdt: Number(usdtNum.toFixed(6)),
       pricePerUSDT: Number(priceNum.toFixed(2)),
       commissionUSDT: Number(commissionNum.toFixed(6)),
@@ -168,11 +173,12 @@ export function Orders() {
   const calculateProfit = (order: P2POrder) => {
     if (order.type === "COMPRA") return { profitC: 0, profitUSD: 0 };
 
-    const totalReceived = order.usdt * order.pricePerUSDT;
+    // ✅ total truncado para que la ganancia cuadre con lo que “entra”
+    const totalReceived = trunc2(order.usdt * order.pricePerUSDT);
     let totalReceivedC = totalReceived;
 
     if (order.currency === "USD") {
-      totalReceivedC = totalReceived * data.settings.usdToCBuy;
+      totalReceivedC = trunc2(totalReceived * data.settings.usdToCBuy);
     }
 
     const referenceC = order.usdt * usdtToC;
@@ -268,7 +274,6 @@ export function Orders() {
               required
             />
 
-            {/* ✅ Comas en vivo, sin .00 automático */}
             <Input
               label="USDT"
               value={usdtStr}
@@ -374,9 +379,11 @@ export function Orders() {
                 setVisibleCount(30);
               }}
             >
+              <option value="1">Último 1 día</option>
+              <option value="7">Últimos 7 días</option>
               <option value="30">Últimos 30 días</option>
+              <option value="60">Últimos 60 días</option>
               <option value="90">Últimos 90 días</option>
-              <option value="180">Últimos 180 días</option>
               <option value="ALL">Todo</option>
             </select>
           </div>
@@ -447,7 +454,7 @@ export function Orders() {
                 <div>
                   <span className="text-gray-600 dark:text-gray-400">Total:</span>
                   <div className="font-bold text-gray-900 dark:text-white">
-                    {order.currency} {formatMoney(order.usdt * order.pricePerUSDT, { decimals: 2 })}
+                    {order.currency} {formatMoney(trunc2(order.usdt * order.pricePerUSDT), { decimals: 2 })}
                   </div>
                 </div>
 
@@ -461,7 +468,13 @@ export function Orders() {
                 {order.type === "VENTA" && (
                   <div>
                     <span className="text-gray-600 dark:text-gray-400">Ganancia:</span>
-                    <div className={profit.profitC >= 0 ? "font-bold text-green-600" : "font-bold text-red-600"}>
+                    <div
+                      className={
+                        profit.profitC >= 0
+                          ? "font-bold text-green-600"
+                          : "font-bold text-red-600"
+                      }
+                    >
                       C$ {formatMoney(profit.profitC, { decimals: 2 })}
                     </div>
                   </div>
